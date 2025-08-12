@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ETH Block Grade Calculator (Realtime)</title>
+  <style>
+    :root { --fg:#0f172a; --muted:#475569; --bg:#f8fafc; --card:#ffffff; --brand:#0ea5e9; }
+    * { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--fg); margin:0; }
+    .container { max-width: 840px; margin: 32px auto; padding: 24px; background: var(--card); border-radius: 16px; box-shadow: 0 6px 24px rgba(15,23,42,.06); }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    p.lead { margin: 0 0 16px; color: var(--muted); }
+    .controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin: 12px 0 18px; }
+    button { border:0; background: var(--brand); color:#fff; padding:10px 14px; border-radius: 10px; cursor:pointer; font-weight:600; }
+    button.secondary { background:#e2e8f0; color:#0f172a; }
+    button.ghost { background:transparent; color:var(--muted); }
+    button:hover { filter: brightness(0.95); }
+    table { width:100%; border-collapse: collapse; overflow:hidden; border-radius: 12px; }
+    thead th { text-align: left; font-weight:700; font-size:14px; color: var(--muted); padding:12px 10px; background:#f1f5f9; }
+    td { padding:10px; border-top:1px solid #e2e8f0; }
+    tbody tr:hover { background:#f8fafc; }
+    input[type="text"], input[type="number"] { width:100%; padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px; }
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .right { text-align:right; }
+    .mini { font-size:12px; color:var(--muted); }
+    .summary { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; margin-top:16px; }
+    .card { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:14px; }
+    .card h3 { margin:0 0 6px; font-size:14px; color:var(--muted); font-weight:600; }
+    .card .val { font-size:22px; font-weight:800; }
+    .footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    .del-btn { background:transparent; border:0; color:#ef4444; cursor:pointer; font-weight:700; }
+    .del-btn:hover { text-decoration: underline; }
+    .nowrap { white-space: nowrap; }
+    .row-actions { text-align: right; }
+    .note { font-size: 12px; color: var(--muted); }
+    .pill { padding: 2px 8px; background:#e2e8f0; border-radius: 999px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ETH Block Grade Calculator <span class="pill">Real-time</span></h1>
+    <p class="lead">Calculates the Block grade in real time using the weighted average formula \(\sum(Grade×Credits)/\sum(Credits)\). Recommended grade range: 1–6 (decimals allowed).</p>
+
+    <div class="controls">
+      <button id="addRow">➕ Add Course</button>
+      <button id="addPreset" class="secondary">⚙️ Load Example (Analysis/Mechanik/Info/Chemie)</button>
+      <label class="mini">Decimal Places:
+        <select id="decimals" style="margin-left:6px; padding:6px 8px; border-radius:10px; border:1px solid #e2e8f0;">
+          <option value="2">2</option>
+          <option value="1">1</option>
+          <option value="3">3</option>
+          <option value="0">0</option>
+        </select>
+      </label>
+      <button id="clearAll" class="ghost">🧹 Clear</button>
+    </div>
+
+    <table id="table">
+      <thead>
+        <tr>
+          <th style="width:38%">Course</th>
+          <th class="nowrap" style="width:20%">Grade (1–6)</th>
+          <th style="width:20%">Credits</th>
+          <th style="width:12%" class="right">Weight</th>
+          <th style="width:10%" class="row-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <!-- rows injected here -->
+      </tbody>
+    </table>
+
+    <div class="summary">
+      <div class="card"><h3>Total Credits</h3><div class="val" id="sumCredits">0</div></div>
+      <div class="card"><h3>Weighted Sum</h3><div class="val" id="sumWeighted">0.00</div><div class="mini">∑(Grade×Credits)</div></div>
+      <div class="card"><h3>Block Grade</h3><div class="val" id="total">0.00</div></div>
+    </div>
+
+    <div class="footer">
+      <div>Note: Empty rows or invalid inputs (non-numeric / negative / grade &gt; 6) are ignored. Weight = course credits / total credits.</div>
+    </div>
+  </div>
+
+  <script>
+    const tbody = document.getElementById('tbody');
+    const sumCreditsEl = document.getElementById('sumCredits');
+    const sumWeightedEl = document.getElementById('sumWeighted');
+    const totalEl = document.getElementById('total');
+    const decimalsSel = document.getElementById('decimals');
+
+    const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
+
+    function makeRow(data = { name:'', grade:'', credit:'' }) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" placeholder="e.g., Analysis" value="${data.name ?? ''}"></td>
+        <td><input type="number" step="0.01" min="1" max="6" placeholder="e.g., 5.0" value="${data.grade ?? ''}"></td>
+        <td><input type="number" step="0.1" min="0" placeholder="e.g., 7" value="${data.credit ?? ''}"></td>
+        <td class="right mini weight">—</td>
+        <td class="row-actions"><button class="del-btn" title="Delete this row">Delete</button></td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    function recalc() {
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      let sumCredits = 0;
+      let sumWeighted = 0;
+
+      const parsedRows = rows.map(tr => {
+        const gradeEl = tr.cells[1]?.querySelector('input');
+        const creditEl = tr.cells[2]?.querySelector('input');
+        const grade = parseFloat(gradeEl?.value);
+        const credit = parseFloat(creditEl?.value);
+        if (isFinite(grade) && isFinite(credit) && credit >= 0) {
+          const g = clamp(grade, 1, 6);
+          sumCredits += credit;
+          sumWeighted += g * credit;
+          return { tr, g, credit };
+        }
+        return { tr, g: NaN, credit: NaN };
+      });
+
+      const d = parseInt(decimalsSel.value, 10) || 2;
+      sumCreditsEl.textContent = (sumCredits % 1 === 0) ? sumCredits.toString() : sumCredits.toFixed(1);
+      sumWeightedEl.textContent = sumWeighted.toFixed(d);
+      const total = sumCredits > 0 ? (sumWeighted / sumCredits) : 0;
+      totalEl.textContent = total.toFixed(d);
+
+      parsedRows.forEach(({ tr, credit }) => {
+        const weightCell = tr.querySelector('.weight');
+        if (!weightCell) return;
+        if (isFinite(credit) && sumCredits > 0) {
+          const w = credit / sumCredits * 100;
+          weightCell.textContent = w.toFixed(1) + '%';
+        } else {
+          weightCell.textContent = '—';
+        }
+      });
+    }
+
+    document.getElementById('table').addEventListener('input', (e) => {
+      if (e.target.matches('input, select')) {
+        recalc();
+      }
+    });
+
+    document.getElementById('table').addEventListener('click', (e) => {
+      if (e.target.classList.contains('del-btn')) {
+        const tr = e.target.closest('tr');
+        tr?.remove();
+        recalc();
+      }
+    });
+
+    document.getElementById('addRow').addEventListener('click', () => {
+      makeRow();
+      recalc();
+    });
+
+    document.getElementById('addPreset').addEventListener('click', () => {
+      tbody.innerHTML = '';
+      [
+        { name:'Analysis', grade:'', credit:'7' },
+        { name:'Mechanik', grade:'', credit:'6' },
+        { name:'Informatik', grade:'', credit:'4' },
+        { name:'Chemie', grade:'', credit:'4' },
+      ].forEach(makeRow);
+      recalc();
+    });
+
+    document.getElementById('clearAll').addEventListener('click', () => {
+      tbody.innerHTML = '';
+      makeRow();
+      recalc();
+    });
+
+    decimalsSel.addEventListener('change', recalc);
+
+    makeRow();
+    recalc();
+  </script>
+</body>
+</html>
